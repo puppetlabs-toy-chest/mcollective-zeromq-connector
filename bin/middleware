@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 require 'ffi-rzmq'
 
+$stdout.sync = true
+
 # simple wrapper to raise if zeromq failed
 def assert_zeromq(rc)
   return if ZMQ::Util.resultcode_ok?(rc)
