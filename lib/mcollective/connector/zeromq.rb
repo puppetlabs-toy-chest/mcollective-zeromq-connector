@@ -6,27 +6,27 @@ module MCollective
     class Zeromq < Base
       def initialize
         @context = ZMQ::Context.new
-        @sub_socket = @context.socket(ZMQ::SUB)
         @pub_socket = @context.socket(ZMQ::PUB)
+        @sub_socket = @context.socket(ZMQ::SUB)
       end
 
       def connect
         Log.debug('connect')
-        error_check(@sub_socket.connect('tcp://127.0.0.1:61616'))
-        error_check(@pub_socket.connect('tcp://127.0.0.1:61615'))
+        assert_zeromq(@pub_socket.connect('tcp://127.0.0.1:61615'))
+        assert_zeromq(@sub_socket.connect('tcp://127.0.0.1:61616'))
       end
 
       def disconnect
         Log.debug('disconnect')
-        @sub_socket.close
-        @pub_socket.close
+        assert_zeromq(@sub_socket.close)
+        assert_zeromq(@pub_socket.close)
       end
 
       def subscribe(agent, type, collective)
         Log.debug('subscribe')
         topic = topic_for_kind(agent, type, collective)[:topic]
         Log.debug("subscribing to topic '#{topic}'")
-        error_check(@sub_socket.setsockopt(ZMQ::SUBSCRIBE, topic))
+        assert_zeromq(@sub_socket.setsockopt(ZMQ::SUBSCRIBE, topic))
         Log.debug("subscribed")
       end
 
@@ -34,7 +34,7 @@ module MCollective
         Log.debug('unsubscribe')
         topic = topic_for_kind(agent, type, collective)[:topic]
         Log.debug("unsubscribing from topic '#{topic}'")
-        error_check(@sub_socket.setsockopt(ZMQ::UNSUBSCRIBE, topic))
+        assert_zeromq(@sub_socket.setsockopt(ZMQ::UNSUBSCRIBE, topic))
         Log.debug("unsubscribed from topic '#{topic}'")
       end
 
@@ -166,16 +166,9 @@ module MCollective
         stuff
       end
 
-      # lifted from https://github.com/andrewvc/learn-ruby-zeromq/
-      def error_check(rc)
-        if ZMQ::Util.resultcode_ok?(rc)
-          false
-        else
-          Log.error("Operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]")
-          caller(1).each { |callstack| Log.warn(callstack) }
-          raise
-          true
-        end
+      def assert_zeromq(rc)
+        return if ZMQ::Util.resultcode_ok?(rc)
+        raise "zeromq operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]"
       end
     end
   end
