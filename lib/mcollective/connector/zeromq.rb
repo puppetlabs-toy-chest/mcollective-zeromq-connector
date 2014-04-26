@@ -55,14 +55,22 @@ module MCollective
       def receive
         Log.debug('Waiting for a message from zeromq')
         topic = ''
-        @sub_socket.recv_string(topic)
-
         headers_str = ''
-        @sub_socket.recv_string(headers_str) if @sub_socket.more_parts?
-        headers = MessagePack.unpack(headers_str)
-
         body = ''
-        @sub_socket.recv_string(body) if @sub_socket.more_parts?
+
+        assert_zeromq(@sub_socket.recv_string(topic))
+        unless @sub_socket.more_parts?
+          raise 'expected multi-part message'
+        end
+
+        assert_zeromq(@sub_socket.recv_string(headers_str))
+        unless @sub_socket.more_parts?
+          raise 'expected multi-part message'
+        end
+
+        assert_zeromq(@sub_socket.recv_string(body))
+
+        headers = MessagePack.unpack(headers_str)
 
         Message.new(body, nil, :headers => headers)
       end
