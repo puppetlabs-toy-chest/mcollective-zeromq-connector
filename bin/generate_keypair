@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+require 'ffi-rzmq'
+
+# Usage: generate_keypairs [NAME...]
+# just a quick wrapper around http://api.zeromq.org/4-0:zmq-curve-keypair
+# for building up testing environments
+
+ARGV.each do |name|
+  public_key, private_key = ZMQ::Util.curve_keypair
+
+  File.open("#{name}.public", 'w') do |file|
+    file.puts public_key
+  end
+
+  File.open("#{name}.private", 'w') do |file|
+    file.puts private_key
+  end
+end
