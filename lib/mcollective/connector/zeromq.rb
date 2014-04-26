@@ -41,16 +41,19 @@ module MCollective
       end
 
       def connect
-        Log.debug('connecting')
+        Log.debug("connecting @pub_socket to #{@pub_endpoint}'")
         assert_zeromq(@pub_socket.connect(@pub_endpoint))
+        Log.debug("connecting @sub_socket to #{@sub_endpoint}'")
         assert_zeromq(@sub_socket.connect(@sub_endpoint))
         Log.debug('connected')
       end
 
       def disconnect
-        Log.debug('disconnect')
-        assert_zeromq(@sub_socket.close)
+        Log.debug('disconnecting pub_socket')
         assert_zeromq(@pub_socket.close)
+        Log.debug('disconnecting sub_socket')
+        assert_zeromq(@sub_socket.close)
+        Log.debug('disconnected')
       end
 
       def subscribe(agent, type, collective)
