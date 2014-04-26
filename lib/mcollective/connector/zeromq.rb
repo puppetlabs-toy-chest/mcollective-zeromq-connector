@@ -43,24 +43,10 @@ module MCollective
 
         if message.type == :direct_request
           message.discovered_hosts.each do |node|
-            stuff = topic_for_message(message, node)
-            topic = stuff[:topic]
-            headers = stuff[:headers]
-
-            Log.debug("sending direct message to '#{node}' on '#{topic}' with headers '#{headers.inspect}'")
-            @pub_socket.send_string(topic, ZMQ::SNDMORE)
-            @pub_socket.send_string(headers.to_msgpack, ZMQ::SNDMORE)
-            @pub_socket.send_string(message.payload)
+            publish_message(message, node)
           end
         else
-          stuff = topic_for_message(message)
-          topic = stuff[:topic]
-          headers = stuff[:headers]
-
-          Log.debug("sending message to '#{topic}' with headers '#{headers.inspect}'")
-          @pub_socket.send_string(topic, ZMQ::SNDMORE)
-          @pub_socket.send_string(headers.to_msgpack, ZMQ::SNDMORE)
-          @pub_socket.send_string(message.payload)
+          publish_message(message)
         end
 
         Log.debug("publish done")
@@ -164,6 +150,22 @@ module MCollective
         end
 
         stuff
+      end
+
+      def publish_message(message, node = nil)
+        stuff = topic_for_message(message, node)
+        topic = stuff[:topic]
+        headers = stuff[:headers]
+
+        if node
+          Log.debug("sending direct message to '#{node}' on '#{topic}' with headers '#{headers.inspect}'")
+        else
+          Log.debug("sending message on '#{topic}' with headers '#{headers.inspect}'")
+        end
+
+        assert_zeromq(@pub_socket.send_string(topic, ZMQ::SNDMORE))
+        assert_zeromq(@pub_socket.send_string(headers.to_msgpack, ZMQ::SNDMORE))
+        assert_zeromq(@pub_socket.send_string(message.payload))
       end
 
       def assert_zeromq(rc)
