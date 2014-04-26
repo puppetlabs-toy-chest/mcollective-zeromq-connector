@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+require 'ffi-rzmq'
+
+# simple wrapper to raise if zeromq failed
+def assert_zeromq(rc)
+  return if ZMQ::Util.resultcode_ok?(rc)
+  raise "Operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]"
+end
+
+# This is a simple proxying middleware.  We create a SUB socket that clients
+# publish messages to, and a PUB socket that we fan stuff out on
+
+context = ZMQ::Context.new
+input_socket = context.socket(ZMQ::SUB)
+output_socket = context.socket(ZMQ::PUB)
+
+# subscribe to all the messages
+assert_zeromq(input_socket.setsockopt(ZMQ::SUBSCRIBE, ''))
+
+# start listening to the network
+assert_zeromq(input_socket.bind('tcp://*:61615'))
+assert_zeromq(output_socket.bind('tcp://*:61616'))
+
+puts "going into mainloop"
+# proxy traffic between sockets - this is a mainloop
+ZMQ::Proxy.new(input_socket, output_socket)
