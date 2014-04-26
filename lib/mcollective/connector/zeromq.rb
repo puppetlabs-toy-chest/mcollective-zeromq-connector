@@ -32,15 +32,19 @@ module MCollective
       # name as a sentinel.
 
       def initialize
+        @pub_endpoint = get_option('zeromq.pub_endpoint')
+        @sub_endpoint = get_option('zeromq.sub_endpoint')
+
         @context = ZMQ::Context.new
         @pub_socket = @context.socket(ZMQ::PUB)
         @sub_socket = @context.socket(ZMQ::SUB)
       end
 
       def connect
-        Log.debug('connect')
-        assert_zeromq(@pub_socket.connect('tcp://127.0.0.1:61615'))
-        assert_zeromq(@sub_socket.connect('tcp://127.0.0.1:61616'))
+        Log.debug('connecting')
+        assert_zeromq(@pub_socket.connect(@pub_endpoint))
+        assert_zeromq(@sub_socket.connect(@sub_endpoint))
+        Log.debug('connected')
       end
 
       def disconnect
@@ -206,6 +210,16 @@ module MCollective
       def assert_zeromq(rc)
         return if ZMQ::Util.resultcode_ok?(rc)
         raise "zeromq operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]"
+      end
+
+      def get_option(opt, default=nil)
+        if Config.instance.pluginconf.include?(opt)
+          return Config.instance.pluginconf[opt]
+        end
+
+        return default unless default.nil?
+
+        raise("No plugin.#{opt} configuration option given")
       end
     end
   end
