@@ -38,6 +38,10 @@ module MCollective
         @context = ZMQ::Context.new
         @pub_socket = @context.socket(ZMQ::PUB)
         @sub_socket = @context.socket(ZMQ::SUB)
+
+        # don't wait for messages to get delivered/received on close
+        assert_zeromq(@pub_socket.setsockopt(ZMQ::LINGER, 0))
+        assert_zeromq(@sub_socket.setsockopt(ZMQ::LINGER, 0))
       end
 
       def connect
