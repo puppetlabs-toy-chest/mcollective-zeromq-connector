@@ -4,6 +4,33 @@ require 'msgpack'
 module MCollective
   module Connector
     class Zeromq < Base
+      # Implementation notes:
+
+      # This connector is a simple 0MQ connector that uses a pair of PUB/SUB
+      # sockets.  We publish to the PUB socket (@pub_socket), and receive on
+      # the SUB socket (@sub_socket)
+
+      # Message format:
+      #   We send a multipart message of 3 parts:
+      #      topic
+      #      headers (a hash encoded with msgpack)
+      #      body (MCollective::Message#payload)
+
+      # Currently the only header we use/need is reply_to, so it might make
+      # sense to just make the second part hold that.
+
+      # Topics used:
+      #   "#{collective} #{agent} "                - broadcast for agents
+      #   "#{collective} reply #{identity} #{$$} " - replies
+      #   "#{collective} nodes #{identity} "       - direct addressing to node
+      #
+      # It's worth bearing in mind that ZeroMQ PUB/SUB suscriptions operate as
+      # a common prefix match on all messages passing so a subscription to 'a'
+      # will get you messages to /^a/.  For this reason we need to be careful
+      # about common prefixes (imagine a foo and foobar agent).  For agents
+      # and identities spaces are illegal, so we add a trailing space to the
+      # name as a sentinel.
+
       def initialize
         @context = ZMQ::Context.new
         @pub_socket = @context.socket(ZMQ::PUB)
@@ -131,7 +158,7 @@ module MCollective
 
       # the topic we should subscribe to for messages of this type
       def topic_for_kind(agent, type, collective, target = nil)
-        reply_to = "#{collective}.reply.#{Config.instance.identity}_#{$$}"
+        reply_to = "#{collective} reply #{Config.instance.identity} #{$$} "
         stuff = {
           :topic => nil,
           :headers => {},
@@ -141,17 +168,17 @@ module MCollective
           stuff[:topic] = reply_to
 
         when :broadcast, :request
-          stuff[:topic] = "#{collective}.#{agent}"
+          stuff[:topic] = "#{collective} #{agent} "
           stuff[:headers]['reply_to'] = reply_to
 
         when :direct_request
           # When we send a directed message
-          stuff[:topic] = "#{collective}.nodes.#{target}"
+          stuff[:topic] = "#{collective} nodes #{target} "
           stuff[:headers]['reply_to'] = reply_to
 
         when :directed
           # Where we listen for directed messages
-          stuff[:topic] = "#{collective}.nodes.#{Config.instance.identity}"
+          stuff[:topic] = "#{collective} nodes #{Config.instance.identity} "
 
         else
           raise "Unknown message type #{type}"
