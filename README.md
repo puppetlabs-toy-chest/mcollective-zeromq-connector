@@ -22,9 +22,21 @@ libdir = $PATH_TO_HERE/lib
 connector = zeromq
 plugin.zeromq.pub_endpoint = tcp://$MIDDLEWARE_HOST:61615
 plugin.zeromq.sub_endpoint = tcp://$MIDDLEWARE_HOST:61616
+
+plugin.zeromq.curve.middleware_public_key = /etc/mcollective/middleware.public
+plugin.zeromq.curve.public_key = /etc/mcollective/this_actor.public
+plugin.zeromq.curve.private_key = /etc/mcollective/this_actor.private
 ```
 
 Then start the middleware from bin/middleware on the middleware\_host
+
+Authentication is via Curve and on by default.  To disable this you have to
+use the option `zeromq.curve.enabled`
+
+```
+# Not recommended, but for a quick demo possibly forgivable
+plugin.zeromq.curve.enabled = false
+```
 
 ## ZeroMQ multicast with no dedicated server
 
@@ -44,10 +56,16 @@ This isn't 100% working for me right now, will update.
 
 # TODO
 
+Find out if there's a better way to store/manage the curve keys.  Currently we
+just keep them in a file as the zeromq library uses Z85 printable text.
+http://api.zeromq.org/4-0:zmq-z85-encode
+
+Verify curve keys more strongly.  Currently the only verification is that the
+middleware matches its pre-shared public key.  Hopefully there's a mechanism
+that more closely resembles an issuing certificate authority with a revocation
+feature.
+
+For maximum laziness figure out if we can key Curve from the OpenSSL CA/keys
+that a puppet ca generates.
+
 Get the multicast example working all the way.
-
-Add authentication configuration (Curve/Password)
-
-Figure out if we can key Curve from the OpenSSL CA/keys that a
-puppet ca generates.
-

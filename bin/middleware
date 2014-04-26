@@ -7,12 +7,25 @@ def assert_zeromq(rc)
   raise "Operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]"
 end
 
+#  specify curve credentials on the server
+def curve_server_socket(socket, private_key)
+  assert_zeromq(socket.setsockopt(ZMQ::CURVE_SERVER, 1))
+  assert_zeromq(socket.setsockopt(ZMQ::CURVE_SECRETKEY, private_key))
+end
+
 # This is a simple proxying middleware.  We create a SUB socket that clients
 # publish messages to, and a PUB socket that we fan stuff out on
 
 context = ZMQ::Context.new
 input_socket = context.socket(ZMQ::SUB)
 output_socket = context.socket(ZMQ::PUB)
+
+if ARGV.size > 0
+  puts "configuring as curve server with private key #{ARGV[0]}"
+  private_key = IO.read(ARGV[0]).chomp
+  curve_server_socket(input_socket, private_key)
+  curve_server_socket(output_socket, private_key)
+end
 
 # subscribe to all the messages
 assert_zeromq(input_socket.setsockopt(ZMQ::SUBSCRIBE, ''))

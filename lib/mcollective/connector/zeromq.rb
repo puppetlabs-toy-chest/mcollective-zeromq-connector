@@ -42,6 +42,20 @@ module MCollective
         # don't wait for messages to get delivered/received on close
         assert_zeromq(@pub_socket.setsockopt(ZMQ::LINGER, 0))
         assert_zeromq(@sub_socket.setsockopt(ZMQ::LINGER, 0))
+
+        if get_bool_option('zeromq.curve.enabled', true)
+          # load the curve keys
+          middleware_public = IO.read(get_option('zeromq.curve.middleware_public_key')).chomp
+          our_public  = IO.read(get_option('zeromq.curve.public_key')).chomp
+          our_private = IO.read(get_option('zeromq.curve.private_key')).chomp
+
+          # key the sockets
+          [@pub_socket, @sub_socket].each do |socket|
+            socket.setsockopt(ZMQ::CURVE_SERVERKEY, middleware_public)
+            socket.setsockopt(ZMQ::CURVE_PUBLICKEY, our_public)
+            socket.setsockopt(ZMQ::CURVE_SECRETKEY, our_private)
+          end
+        end
       end
 
       def connect
@@ -222,6 +236,16 @@ module MCollective
       def get_option(opt, default=nil)
         if Config.instance.pluginconf.include?(opt)
           return Config.instance.pluginconf[opt]
+        end
+
+        return default unless default.nil?
+
+        raise("No plugin.#{opt} configuration option given")
+      end
+
+      def get_bool_option(opt, default=nil)
+        if Config.instance.pluginconf.include?(opt)
+          return Util.str_to_bool(Config.instance.pluginconf[opt])
         end
 
         return default unless default.nil?
