@@ -1,9 +1,8 @@
-#
-# Making demo environments is a bit fiddly as you have to set up a config file
-# for each role, and foreman doesn't paramterise nicely, so generate the
-# entire thing
-
 class Helpers < Thor
+  # Making demo environments is a bit fiddly as you have to set up a config file
+  # for each role, and foreman doesn't paramterise nicely, so generate the
+  # entire thing
+
   desc "make_demo DIRECTORY", "makes a demo in a directory"
   method_option :mcollective,
                 :default => Pathname.new('~/src/mcollective').expand_path.to_s,
@@ -38,13 +37,28 @@ class Helpers < Thor
       if options[:curve]
         # generate curve key
         puts "keypair for #{node}"
-        `bin/generate_keypair #{directory + node}`
+        make_curve_keypair((directory + node).to_s)
       end
 
       make_mcollective_config(directory, options, node)
     end
 
     make_client(directory, options)
+  end
+
+  desc "make_curve_keypair FILE", "make a curve keypair"
+  def make_curve_keypair(path)
+    require 'ffi-rzmq'
+
+    public_key, private_key = ZMQ::Util.curve_keypair
+
+    File.open("#{path}.public", 'w') do |file|
+      file.puts public_key
+    end
+
+    File.open("#{path}.private", 'w') do |file|
+      file.puts private_key
+    end
   end
 
   private
