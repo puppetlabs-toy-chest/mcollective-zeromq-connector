@@ -1,7 +1,11 @@
 #!/usr/bin/env ruby
 require 'ffi-rzmq'
+require 'logger'
 
 $stdout.sync = true
+
+logger = Logger.new(STDOUT)
+logger.level = Logger::DEBUG
 
 # simple wrapper to raise if zeromq failed
 def assert_zeromq(rc)
@@ -21,9 +25,29 @@ end
 context = ZMQ::Context.new
 input_socket = context.socket(ZMQ::SUB)
 output_socket = context.socket(ZMQ::PUB)
+listen_socket = nil
+
+# tap the proxy - TODO cli parse
+if true
+  listen_socket = context.socket(ZMQ::PAIR)
+  assert_zeromq(listen_socket.bind('inproc://tap'))
+
+  Thread.new do
+    logger.info "listening thread starting"
+
+    tap = context.socket(ZMQ::PAIR)
+    assert_zeromq(tap.connect('inproc://tap'))
+
+    while true
+      message = []
+      assert_zeromq(tap.recv_strings(message))
+      logger.debug "saw message on '#{message[0]}'"
+    end
+  end
+end
 
 if ARGV.size > 0
-  puts "configuring as curve server with private key #{ARGV[0]}"
+  logger.info "configuring as curve server with private key from #{ARGV[0]}"
   private_key = IO.read(ARGV[0]).chomp
   curve_server_socket(input_socket, private_key)
   curve_server_socket(output_socket, private_key)
@@ -36,6 +60,6 @@ assert_zeromq(input_socket.setsockopt(ZMQ::SUBSCRIBE, ''))
 assert_zeromq(input_socket.bind('tcp://*:61615'))
 assert_zeromq(output_socket.bind('tcp://*:61616'))
 
-puts "going into mainloop"
-# proxy traffic between sockets - this is a mainloop
-ZMQ::Proxy.new(input_socket, output_socket)
+logger.info "going into mainloop"
+# proxy traffic between sockets, duplicating to third - this is a mainloop
+ZMQ::Proxy.new(input_socket, output_socket, listen_socket)
