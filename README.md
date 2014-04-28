@@ -9,9 +9,7 @@ so I might not have all the behaviours down immediately.
 In many configurations you'll want to run a middleware server to
 allow things to connect together - there's a quick hacky one -
 `bin/middleware`.  In the future that might want to become its own
-project, and maybe in something lower level than ruby, but for now
-it spends most of the time in `zeromq_proxy` which is over in libzmq
-anyhow.
+project, and maybe in something lower level than ruby for the perfomance.
 
 # Configuration
 
@@ -20,8 +18,7 @@ anyhow.
 ```
 libdir = $PATH_TO_HERE/lib
 connector = zeromq
-plugin.zeromq.pub_endpoint = tcp://$MIDDLEWARE_HOST:61615
-plugin.zeromq.sub_endpoint = tcp://$MIDDLEWARE_HOST:61616
+plugin.zeromq.middlware = tcp://192.168.1.1:61616
 
 plugin.zeromq.curve.middleware_public_key = /etc/mcollective/middleware.public
 plugin.zeromq.curve.public_key = /etc/mcollective/this_actor.public
@@ -38,23 +35,9 @@ use the option `zeromq.curve.enabled`
 plugin.zeromq.curve.enabled = false
 ```
 
-## ZeroMQ multicast with no dedicated server
-
-```
-libdir = $PATH_TO_HERE/lib
-connector = zeromq
-plugin.zeromq.pub_endpoint = epgm://en0;239.192.1.1:61616
-plugin.zeromq.sub_endpoint = epgm://en0;239.192.1.1:61616
-```
-
-One potential gotcha where is you need pgm support built into your zeromq.
-On my macports at least that's not the default:
-
-    port install zmq-devel +pgm
-
-This isn't 100% working for me right now, will update.
-
 # TODO
+
+Implement the 0.1 protocol from PROTOCOL.md
 
 Find out if there's a better way to store/manage the curve keys.  Currently we
 just keep them in a file as the zeromq library uses Z85 printable text.
@@ -67,5 +50,3 @@ feature.
 
 For maximum laziness figure out if we can key Curve from the OpenSSL CA/keys
 that a puppet ca generates.
-
-Get the multicast example working all the way.

@@ -1,47 +1,30 @@
 require 'ffi-rzmq'
 require 'msgpack'
 
+  $stdout.sync = true
+
 module MCollective
   module Connector
     class Zeromq < Base
       # Implementation notes:
 
-      # This connector is a simple 0MQ connector that uses a pair of PUB/SUB
-      # sockets.  We publish to the PUB socket (@pub_socket), and receive on
-      # the SUB socket (@sub_socket)
-
-      # Message format:
-      #   We send a multipart message of 3 parts:
-      #      topic
-      #      headers (a hash encoded with msgpack)
-      #      body (MCollective::Message#payload)
-
-      # Currently the only header we use/need is reply_to, so it might make
-      # sense to just make the second part hold that.
+      # This connector is a simple 0MQ connector that implements the 0.1
+      # protocol as outlined in PROTOCOL.md
 
       # Topics used:
-      #   "#{collective} #{agent} "                - broadcast for agents
-      #   "#{collective} reply #{identity} #{$$} " - replies
-      #   "#{collective} nodes #{identity} "       - direct addressing to node
-      #
-      # It's worth bearing in mind that ZeroMQ PUB/SUB suscriptions operate as
-      # a common prefix match on all messages passing so a subscription to 'a'
-      # will get you messages to /^a/.  For this reason we need to be careful
-      # about common prefixes (imagine a foo and foobar agent).  For agents
-      # and identities spaces are illegal, so we add a trailing space to the
-      # name as a sentinel.
+      #   "#{collective} #{agent}"                - broadcast for agents
+      #   "#{collective} reply #{identity} #{$$}" - replies
+      #   "#{collective} nodes #{identity}"       - direct addressing to node
 
       def initialize
-        @pub_endpoint = get_option('zeromq.pub_endpoint')
-        @sub_endpoint = get_option('zeromq.sub_endpoint')
+        @endpoint = get_option('zeromq.middleware')
 
         @context = ZMQ::Context.new
-        @pub_socket = @context.socket(ZMQ::PUB)
-        @sub_socket = @context.socket(ZMQ::SUB)
+        @socket = @context.socket(ZMQ::REQ)
+        @mutex = Mutex.new
 
         # don't wait for messages to get delivered/received on close
-        assert_zeromq(@pub_socket.setsockopt(ZMQ::LINGER, 0))
-        assert_zeromq(@sub_socket.setsockopt(ZMQ::LINGER, 0))
+        assert_zeromq(@socket.setsockopt(ZMQ::LINGER, 0))
 
         if get_bool_option('zeromq.curve.enabled', true)
           # load the curve keys
@@ -49,28 +32,26 @@ module MCollective
           our_public  = IO.read(get_option('zeromq.curve.public_key')).chomp
           our_private = IO.read(get_option('zeromq.curve.private_key')).chomp
 
-          # key the sockets
-          [@pub_socket, @sub_socket].each do |socket|
-            socket.setsockopt(ZMQ::CURVE_SERVERKEY, middleware_public)
-            socket.setsockopt(ZMQ::CURVE_PUBLICKEY, our_public)
-            socket.setsockopt(ZMQ::CURVE_SECRETKEY, our_private)
-          end
+          # key the socket
+          @socket.setsockopt(ZMQ::CURVE_SERVERKEY, middleware_public)
+          @socket.setsockopt(ZMQ::CURVE_PUBLICKEY, our_public)
+          @socket.setsockopt(ZMQ::CURVE_SECRETKEY, our_private)
         end
       end
 
       def connect
-        Log.debug("connecting @pub_socket to #{@pub_endpoint}'")
-        assert_zeromq(@pub_socket.connect(@pub_endpoint))
-        Log.debug("connecting @sub_socket to #{@sub_endpoint}'")
-        assert_zeromq(@sub_socket.connect(@sub_endpoint))
-        Log.debug('connected')
+        Log.debug("connecting @socket to #{@endpoint}'")
+        assert_zeromq(@socket.connect(@endpoint))
+
+        response = make_request([ 'CONNECT', 'VERSION', '0.1' ])
+        # TODO assert response[0] == 'OK'
+        Log.debug "got #{response.inspect}"
       end
 
       def disconnect
-        Log.debug('disconnecting pub_socket')
-        assert_zeromq(@pub_socket.close)
-        Log.debug('disconnecting sub_socket')
-        assert_zeromq(@sub_socket.close)
+        Log.debug('disconnecting')
+        response = make_request([ 'DISCONNECT' ])
+        assert_zeromq(@socket.close)
         Log.debug('disconnected')
       end
 
@@ -78,16 +59,18 @@ module MCollective
         Log.debug('subscribe')
         topic = topic_for_kind(agent, type, collective)[:topic]
         Log.debug("subscribing to topic '#{topic}'")
-        assert_zeromq(@sub_socket.setsockopt(ZMQ::SUBSCRIBE, topic))
-        Log.debug("subscribed")
+        response = make_request([ 'SUB', topic ])
+        Log.debug "got #{response.inspect}"
       end
 
       def unsubscribe(agent, type, collective)
         Log.debug('unsubscribe')
         topic = topic_for_kind(agent, type, collective)[:topic]
+
         Log.debug("unsubscribing from topic '#{topic}'")
-        assert_zeromq(@sub_socket.setsockopt(ZMQ::UNSUBSCRIBE, topic))
-        Log.debug("unsubscribed from topic '#{topic}'")
+        response = make_request([ 'UNSUB', topic ])
+        # TODO assert response[0] == 'OK'
+        Log.debug "got #{response.inspect}"
       end
 
       def publish(message)
@@ -105,26 +88,30 @@ module MCollective
       end
 
       def receive
-        Log.debug('Waiting for a message from zeromq')
-        topic = ''
-        headers_str = ''
-        body = ''
+        while true
+          Log.debug('asking for a message from zeromq')
 
-        assert_zeromq(@sub_socket.recv_string(topic))
-        unless @sub_socket.more_parts?
-          raise 'expected multi-part message'
+          response = make_request(['GET'])
+          Log.debug(response.inspect)
+          success = response.shift
+          # TODO assert success == 'OK'
+
+          kind = response.shift
+          Log.debug("got a #{kind}")
+          if kind == 'MESSAGE'
+            topic = response.shift
+            reply_to = response.shift
+            body = response.shift
+
+            headers = {}
+            if reply_to != ''
+              headers[:reply_to] = reply_to
+            end
+            Log.debug("message on '#{topic}' with #{headers.inspect}")
+            return Message.new(body, nil, :headers => headers)
+          end
+          sleep 0.5
         end
-
-        assert_zeromq(@sub_socket.recv_string(headers_str))
-        unless @sub_socket.more_parts?
-          raise 'expected multi-part message'
-        end
-
-        assert_zeromq(@sub_socket.recv_string(body))
-
-        headers = MessagePack.unpack(headers_str)
-
-        Message.new(body, nil, :headers => headers)
       end
 
       private
@@ -173,8 +160,8 @@ module MCollective
         case message.type
         when :reply
           {
-            :topic => message.request.headers['reply_to'],
-            :headers => {},
+            :topic => message.request.headers[:reply_to],
+            :reply_to => '',
           }
         else
           topic_for_kind(message.agent, message.type, message.collective, target)
@@ -183,49 +170,60 @@ module MCollective
 
       # the topic we should subscribe to for messages of this type
       def topic_for_kind(agent, type, collective, target = nil)
-        reply_to = "#{collective} reply #{Config.instance.identity} #{$$} "
-        stuff = {
+        reply_to = "#{collective} reply #{Config.instance.identity} #{$$}"
+        envelope = {
           :topic => nil,
-          :headers => {},
+          :reply_to => '',
         }
         case type
         when :reply
-          stuff[:topic] = reply_to
+          envelope[:topic] = reply_to
 
         when :broadcast, :request
-          stuff[:topic] = "#{collective} #{agent} "
-          stuff[:headers]['reply_to'] = reply_to
+          envelope[:topic] = "#{collective} #{agent}"
+          envelope[:reply_to] = reply_to
 
         when :direct_request
           # When we send a directed message
-          stuff[:topic] = "#{collective} nodes #{target} "
-          stuff[:headers]['reply_to'] = reply_to
+          envelope[:topic] = "#{collective} nodes #{target}"
+          envelope[:reply_to] = reply_to
 
         when :directed
           # Where we listen for directed messages
-          stuff[:topic] = "#{collective} nodes #{Config.instance.identity} "
+          envelope[:topic] = "#{collective} nodes #{Config.instance.identity}"
 
         else
           raise "Unknown message type #{type}"
         end
 
-        stuff
+        envelope
       end
 
       def publish_message(message, node = nil)
-        stuff = topic_for_message(message, node)
-        topic = stuff[:topic]
-        headers = stuff[:headers]
+        envelope = topic_for_message(message, node)
+        topic = envelope[:topic]
+        reply_to = envelope[:reply_to]
 
         if node
-          Log.debug("sending direct message to '#{node}' on '#{topic}' with headers '#{headers.inspect}'")
+          Log.debug("sending direct message to '#{node}' on '#{topic}' with reply_to '#{reply_to}'")
         else
-          Log.debug("sending message on '#{topic}' with headers '#{headers.inspect}'")
+          Log.debug("sending message on '#{topic}' with reply_to '#{reply_to}'")
         end
 
-        assert_zeromq(@pub_socket.send_string(topic, ZMQ::SNDMORE))
-        assert_zeromq(@pub_socket.send_string(headers.to_msgpack, ZMQ::SNDMORE))
-        assert_zeromq(@pub_socket.send_string(message.payload))
+        response = make_request(['PUT', topic, reply_to, message.payload])
+        # TODO assert response[0] == 'OK'
+        Log.debug "got #{response.inspect}"
+      end
+
+      def make_request(message)
+        @mutex.lock
+        Log.debug "sending #{message.inspect}"
+        assert_zeromq(@socket.send_strings(message))
+        Log.debug 'sent'
+        response = []
+        assert_zeromq(@socket.recv_strings(response))
+        @mutex.unlock
+        return response
       end
 
       def assert_zeromq(rc)

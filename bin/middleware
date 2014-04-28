@@ -1,65 +1,149 @@
 #!/usr/bin/env ruby
 require 'ffi-rzmq'
 require 'logger'
+require 'optparse'
 
-$stdout.sync = true
+class Middleware
+  def initialize(options)
+    @clients = {}
 
-logger = Logger.new(STDOUT)
-logger.level = Logger::DEBUG
+    @logger = Logger.new(STDOUT)
+    @logger.level = Logger::DEBUG
 
-# simple wrapper to raise if zeromq failed
-def assert_zeromq(rc)
-  return if ZMQ::Util.resultcode_ok?(rc)
-  raise "Operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]"
-end
+    @context = ZMQ::Context.new
+    @socket = @context.socket(ZMQ::ROUTER)
 
-#  specify curve credentials on the server
-def curve_server_socket(socket, private_key)
-  assert_zeromq(socket.setsockopt(ZMQ::CURVE_SERVER, 1))
-  assert_zeromq(socket.setsockopt(ZMQ::CURVE_SECRETKEY, private_key))
-end
+    if options.include?(:curve_private_key)
+      @logger.debug "enabling curve with private key '#{options[:curve_private_key]}'"
+      private_key = IO.read(options[:curve_private_key]).chomp
+      assert_zeromq(@socket.setsockopt(ZMQ::CURVE_SERVER, 1))
+      assert_zeromq(@socket.setsockopt(ZMQ::CURVE_SECRETKEY, private_key))
+    end
 
-# This is a simple proxying middleware.  We create a SUB socket that clients
-# publish messages to, and a PUB socket that we fan stuff out on
+    # start listening to the network
+    @logger.debug "binding #{options[:bind]}"
+    assert_zeromq(@socket.bind(options[:bind]))
 
-context = ZMQ::Context.new
-input_socket = context.socket(ZMQ::SUB)
-output_socket = context.socket(ZMQ::PUB)
-listen_socket = nil
+    Thread.new do
+      status_thread
+    end
+  end
 
-# tap the proxy - TODO cli parse
-if true
-  listen_socket = context.socket(ZMQ::PAIR)
-  assert_zeromq(listen_socket.bind('inproc://tap'))
+  def main_loop
+    @logger.info "going into mainloop"
 
-  Thread.new do
-    logger.info "listening thread starting"
-
-    tap = context.socket(ZMQ::PAIR)
-    assert_zeromq(tap.connect('inproc://tap'))
+    poller = ZMQ::Poller.new
+    poller.register_readable(@socket)
 
     while true
-      message = []
-      assert_zeromq(tap.recv_strings(message))
-      logger.debug "saw message on '#{message[0]}'"
+      @logger.info "waiting for a message"
+      poller.poll
+
+      @logger.info "poller woke up"
+
+      if poller.readables.size > 0
+        # Message to route
+        source, message = read_message
+
+        verb = message.shift
+
+        case verb
+        when 'CONNECT'
+          options = Hash[message]
+          @clients[source] = {
+            :options => options,
+            :subscriptions => [],
+            :queue => [],
+          }
+          send_message(source, 'OK')
+
+        when 'DISCONNECT'
+          @clients.delete(source)
+          send_message(source, 'OK')
+
+        when 'SUB'
+          @clients[source][:subscriptions] += message
+          send_message(source, 'OK')
+
+        when 'UNSUB'
+          @clients[source][:subscriptions] -= message
+          send_message(source, 'OK')
+
+        when 'PUT'
+          topic = message.first
+          @clients.values.select { |x| x[:subscriptions].include?(topic) }.each do |client|
+            client[:queue] << message
+          end
+          send_message(source, 'OK')
+
+          @logger.debug "state of the world is now '#{@clients.inspect}"
+
+        when 'GET'
+          queue = @clients[source][:queue]
+          if queue.empty?
+            send_message(source, 'OK', 'WAIT')
+          else
+            send_message(source, 'OK', 'MESSAGE', *(queue.shift))
+          end
+
+          @logger.debug "state of the world is now '#{@clients.inspect}"
+
+
+        else
+          @logger.debug "Don't know how to handle '#{verb}', saying FAIL"
+          send_message(source, 'FAIL', 'Unknown verb')
+        end
+      end
     end
+  end
+
+  private
+
+  def status_thread
+    @logger.info "Starting status thread"
+
+    while true
+      @logger.debug "Currently managing #{@clients.count} clients #{@clients.inspect}"
+      sleep 2
+    end
+  end
+
+  def read_message
+    @logger.debug 'going to read message'
+    message = []
+    assert_zeromq(@socket.recv_strings(message))
+    source = message.slice!(0,2)[0]
+
+    @logger.debug "got #{message.inspect} from #{source.inspect}"
+    return source, message
+  end
+
+  def send_message(target, *message)
+    @logger.debug "sending #{message.inspect} to #{target.inspect}"
+    @socket.send_strings([ target, '', *message ])
+    @logger.debug 'sent message'
+  end
+
+  def assert_zeromq(rc)
+    return if ZMQ::Util.resultcode_ok?(rc)
+    raise "Operation failed, errno [#{ZMQ::Util.errno}] description [#{ZMQ::Util.error_string}]"
   end
 end
 
-if ARGV.size > 0
-  logger.info "configuring as curve server with private key from #{ARGV[0]}"
-  private_key = IO.read(ARGV[0]).chomp
-  curve_server_socket(input_socket, private_key)
-  curve_server_socket(output_socket, private_key)
-end
 
-# subscribe to all the messages
-assert_zeromq(input_socket.setsockopt(ZMQ::SUBSCRIBE, ''))
+options = {
+  :bind  => 'tcp://*:61616',
+}
+OptionParser.new do |opts|
+  opts.banner = "Usage: middleware [options]"
 
-# start listening to the network
-assert_zeromq(input_socket.bind('tcp://*:61615'))
-assert_zeromq(output_socket.bind('tcp://*:61616'))
+  opts.on('--bind', 'Address to bind') do |v|
+    options[:bind] = v
+  end
 
-logger.info "going into mainloop"
-# proxy traffic between sockets, duplicating to third - this is a mainloop
-ZMQ::Proxy.new(input_socket, output_socket, listen_socket)
+  opts.on('--curve-private-key=s', 'The curve privatekey') do |v|
+    options[:curve_private_key] = v
+  end
+end.parse!
+
+Middleware.new(options).main_loop

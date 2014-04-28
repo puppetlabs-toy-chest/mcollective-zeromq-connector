@@ -73,7 +73,7 @@ class Helpers < Thor
         case role
         when 'middleware'
           if options[:curve]
-            file.puts "middleware: #{pwd + 'bin/middleware'} middleware.private"
+            file.puts "middleware: #{pwd + 'bin/middleware'} --curve-private-key middleware.private"
           else
             file.puts "middleware: #{pwd + 'bin/middleware'}"
           end
@@ -102,8 +102,7 @@ plugin.psk = pies
 identity = #{node}
 
 connector = zeromq
-plugin.zeromq.pub_endpoint = tcp://127.0.0.1:61615
-plugin.zeromq.sub_endpoint = tcp://127.0.0.1:61616
+plugin.zeromq.middleware = tcp://127.0.0.1:61616
         """
       if options[:curve]
         file.puts """
