@@ -5,6 +5,7 @@ require 'optparse'
 
 class Middleware
   def initialize(options)
+    @message_count = 0
     @clients = {}
 
     $stdout.sync = true
@@ -47,6 +48,8 @@ class Middleware
         @logger.info "there were messages to handle"
         # Message to route
         source, message = read_message
+
+        @message_count += 1
 
         begin
           verb = message.shift
@@ -106,7 +109,7 @@ class Middleware
     @logger.info "Starting status thread"
 
     while true
-      @logger.debug "Currently managing #{@clients.count} clients #{@clients.inspect}"
+      @logger.debug "Currently managing #{@clients.count} clients.  Have routed #{@message_count} messages."
       sleep 2
     end
   end
