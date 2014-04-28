@@ -18,10 +18,14 @@ module MCollective
 
       def initialize
         @endpoint = get_option('zeromq.middleware')
+        @keepalive_interval = get_option('zeromq.heartbeat', 10)
+        @last_recv = Time.now
 
         @context = ZMQ::Context.new
-        @socket = @context.socket(ZMQ::REQ)
-        @mutex = Mutex.new
+        @socket = @context.socket(ZMQ::DEALER)
+
+        # set an identity based on the identity, pid, and thread.id of this context
+        assert_zeromq(@socket.setsockopt(ZMQ::IDENTITY, "#{Config.instance.identity} #{$$} #{Thread.current.inspect}"))
 
         # don't wait for messages to get delivered/received on close
         assert_zeromq(@socket.setsockopt(ZMQ::LINGER, 0))
@@ -43,14 +47,25 @@ module MCollective
         Log.debug("connecting @socket to #{@endpoint}'")
         assert_zeromq(@socket.connect(@endpoint))
 
-        response = make_request([ 'CONNECT', 'VERSION', '0.1' ])
-        # TODO assert response[0] == 'OK'
-        Log.debug "got #{response.inspect}"
+        options = {
+          'VERSION' => '0.2',
+        }
+
+        if @keepalive_interval
+          options['TTL'] = (@keepalive_interval * 1000).to_s
+        end
+
+        send_message([ 'CONNECT', options.to_a ].flatten)
+
+        @keepalive_thread = Thread.new do
+          #keepalive_thread
+        end
       end
 
       def disconnect
         Log.debug('disconnecting')
-        response = make_request([ 'DISCONNECT' ])
+        send_message([ 'DISCONNECT' ])
+        sleep 0.5 # allow for DISCONNECT to be queued/delivered
         assert_zeromq(@socket.close)
         Log.debug('disconnected')
       end
@@ -59,8 +74,7 @@ module MCollective
         Log.debug('subscribe')
         topic = topic_for_kind(agent, type, collective)[:topic]
         Log.debug("subscribing to topic '#{topic}'")
-        response = make_request([ 'SUB', topic ])
-        Log.debug "got #{response.inspect}"
+        send_message([ 'SUB', topic ])
       end
 
       def unsubscribe(agent, type, collective)
@@ -68,9 +82,7 @@ module MCollective
         topic = topic_for_kind(agent, type, collective)[:topic]
 
         Log.debug("unsubscribing from topic '#{topic}'")
-        response = make_request([ 'UNSUB', topic ])
-        # TODO assert response[0] == 'OK'
-        Log.debug "got #{response.inspect}"
+        send_message([ 'UNSUB', topic ])
       end
 
       def publish(message)
@@ -89,19 +101,21 @@ module MCollective
 
       def receive
         while true
-          Log.debug('asking for a message from zeromq')
+          Log.debug('receive a message from zeromq')
+          message = recv_message
+          @last_recv = Time.now
 
-          response = make_request(['GET'])
-          Log.debug(response.inspect)
-          success = response.shift
-          # TODO assert success == 'OK'
-
-          kind = response.shift
+          kind = message.shift
           Log.debug("got a #{kind}")
-          if kind == 'MESSAGE'
-            topic = response.shift
-            reply_to = response.shift
-            body = response.shift
+
+          case kind
+          when 'PING'
+            send_message([ 'PONG', *message ])
+
+          when 'MESSAGE'
+            topic = message.shift
+            reply_to = message.shift
+            body = message.shift
 
             headers = {}
             if reply_to != ''
@@ -110,7 +124,6 @@ module MCollective
             Log.debug("message on '#{topic}' with #{headers.inspect}")
             return Message.new(body, nil, :headers => headers)
           end
-          sleep 0.5
         end
       end
 
@@ -210,21 +223,43 @@ module MCollective
           Log.debug("sending message on '#{topic}' with reply_to '#{reply_to}'")
         end
 
-        response = make_request(['PUT', topic, reply_to, message.payload])
-        # TODO assert response[0] == 'OK'
-        Log.debug "got #{response.inspect}"
+       send_message(['PUT', topic, reply_to, message.payload])
       end
 
-      def make_request(message)
-        @mutex.lock
+      def send_message(message)
         Log.debug "sending #{message.inspect}"
-        assert_zeromq(@socket.send_strings(message))
+        assert_zeromq(@socket.send_strings([''] + message))
         Log.debug 'sent'
+      end
+
+      def recv_message
         response = []
         assert_zeromq(@socket.recv_strings(response))
-        @mutex.unlock
+        # as we're now a DEALER first frame is ''
+        response.shift
+        Log.debug "got #{response.inspect}"
         return response
       end
+
+      def keepalive_thread
+        while true
+          heard = Time.now - @last_recv
+          Log.debug "last heard from middleware #{heard} seconds ago"
+          if heard > @keepalive_interval
+            Log.warn "haven't heard from middleware in #{heard} seconds, reconnecting"
+            disconnect
+            sleep 1
+            connect
+          end
+
+          time_till_next = @keepalive_interval - heard
+          if time_till_next > 0
+            Log.debug "sleeping up #{time_till_next} seconds until keepalive"
+            sleep time_till_next
+          end
+        end
+      end
+
 
       def assert_zeromq(rc)
         return if ZMQ::Util.resultcode_ok?(rc)

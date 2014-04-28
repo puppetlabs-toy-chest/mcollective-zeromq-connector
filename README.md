@@ -19,7 +19,7 @@ project, and maybe in something lower level than ruby for the perfomance.
 libdir = $PATH_TO_HERE/lib
 connector = zeromq
 plugin.zeromq.middlware = tcp://192.168.1.1:61616
-
+plugin.zeromq.keepalive = 1 # default is 5
 plugin.zeromq.curve.middleware_public_key = /etc/mcollective/middleware.public
 plugin.zeromq.curve.public_key = /etc/mcollective/this_actor.public
 plugin.zeromq.curve.private_key = /etc/mcollective/this_actor.private
