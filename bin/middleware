@@ -71,7 +71,7 @@ class Middleware
           when 'DISCONNECT'
             @logger.info "DISCONNECT '#{source}'"
             @clients.delete(source)
-            continue
+            next # skip the 'update last heard'
 
           when 'SUB'
             @clients[source][:subscriptions] += message
