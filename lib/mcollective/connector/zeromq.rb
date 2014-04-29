@@ -228,7 +228,7 @@ module MCollective
 
       def send_message(message)
         Log.debug "sending #{message.inspect}"
-        assert_zeromq(@socket.send_strings([''] + message))
+        assert_zeromq(@socket.send_strings([''] + message, ZMQ::DONTWAIT))
         Log.debug 'sent'
       end
 
