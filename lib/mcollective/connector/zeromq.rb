@@ -18,7 +18,7 @@ module MCollective
 
       def initialize
         @endpoint = get_option('zeromq.middleware')
-        @heartbeat = Integer(get_option('zeromq.heartbeat', '10'))
+        @heartbeat = Integer(get_option('zeromq.heartbeat', '30'))
 
         @context = ZMQ::Context.new
         @socket = nil
