@@ -5,12 +5,13 @@ require 'optparse'
 
 class Middleware
   def initialize(options)
-    @message_count = 0
+    @recv_count = 0
+    @send_count = 0
     @clients = {}
 
     $stdout.sync = true
     @logger = Logger.new(STDOUT)
-    @logger.level = Logger::DEBUG
+    @logger.level = Logger::INFO
 
     @context = ZMQ::Context.new
     @socket = @context.socket(ZMQ::ROUTER)
@@ -39,17 +40,17 @@ class Middleware
 
     while true
       # TODO - figure out next ping, and set polling based on this
+      @logger.debug "polling for messages"
       poller.poll
-      @logger.info "poller woke up"
+      @logger.debug "poller woke up"
 
       if poller.readables.empty?
         # Here is whete we should put the sending of PING
+        @logger.debug 'time to send some pings'
       else
-        @logger.info "there were messages to handle"
+        @logger.debug 'message available'
         # Message to route
         source, message = read_message
-
-        @message_count += 1
 
         begin
           verb = message.shift
@@ -58,7 +59,7 @@ class Middleware
           when 'CONNECT'
             options = Hash[*message]
             # TODO(richardc): versioncmp
-            @logger.debug "new connection with options #{options.inspect}"
+            @logger.info "CONNECT '#{source}' #{options.inspect}"
 
             @clients[source] = {
               :id => source,
@@ -68,7 +69,9 @@ class Middleware
             }
 
           when 'DISCONNECT'
+            @logger.info "DISCONNECT '#{source}'"
             @clients.delete(source)
+            continue
 
           when 'SUB'
             @clients[source][:subscriptions] += message
@@ -78,9 +81,12 @@ class Middleware
 
           when 'PUT'
             topic = message.first
+            count = 0
             @clients.values.select { |x| x[:subscriptions].include?(topic) }.each do |client|
+              count += 1
               send_message(client[:id], 'MESSAGE', *message)
             end
+            @logger.info "forwarded message on '#{topic}' from '#{source}' to #{count} recipients"
 
           when 'PING'
             send_message(source, 'PONG', *message)
@@ -89,7 +95,7 @@ class Middleware
             # possibly update state to indicate an outstanding PING has been acked
 
           else
-            @logger.debug "Don't know how to handle '#{verb}', saying FAIL"
+            @logger.error "Don't know how to handle '#{verb}', saying FAIL"
             send_message(source, 'ERROR', 'Unknown verb')
           end
         rescue Exception => e
@@ -108,8 +114,13 @@ class Middleware
   def status_thread
     @logger.info "Starting status thread"
 
+    lastmsg = ''
     while true
-      @logger.debug "Currently managing #{@clients.count} clients.  Have routed #{@message_count} messages."
+      newmsg = "Currently managing #{@clients.count} clients. Recv: #{@recv_count}. Sent #{@send_count}."
+      if lastmsg != newmsg
+        @logger.info newmsg
+        lastmsg = newmsg
+      end
       sleep 2
     end
   end
@@ -120,14 +131,16 @@ class Middleware
     assert_zeromq(@socket.recv_strings(message))
     source = message.slice!(0,2)[0]
 
+    @recv_count += 1
     @logger.debug "got #{message.inspect} from #{source.inspect}"
     return source, message
   end
 
   def send_message(target, *message)
     @logger.debug "sending #{message.inspect} to #{target.inspect}"
-    @socket.send_strings([ target, '', *message ])
+    @socket.send_strings([ target, '', *message ], ZMQ::DONTWAIT)
     @logger.debug 'sent message'
+    @send_count += 1
   end
 
   def assert_zeromq(rc)
