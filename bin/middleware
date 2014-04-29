@@ -98,12 +98,12 @@ class Middleware
             count = 0
             @clients.values.select { |x| x.subscriptions.include?(topic) }.each do |subscriber|
               count += 1
-              send_message(subscriber, 'MESSAGE', *message)
+              send_message(subscriber, [ 'MESSAGE' ] + message)
             end
             @logger.info "forwarded message on '#{topic}' from '#{client.id}' to #{count} recipients"
 
           when 'PING'
-            send_message(client, 'PONG', *message)
+            send_message(client, [ 'PONG' ] + message)
 
           when 'PONG'
             # possibly update state to indicate an outstanding PING has been acked
@@ -113,10 +113,10 @@ class Middleware
 
           else
             @logger.error "Don't know how to handle '#{verb}', saying FAIL"
-            send_message(client, 'ERROR', 'Unknown verb')
+            send_message(client, [ 'ERROR', 'Unknown verb' ])
           end
         rescue Exception => e
-          send_message(client, 'ERROR', "caught exception: #{e}")
+          send_message(client, [ 'ERROR', "caught exception: #{e}" ])
         end
 
         client.last_recv = Time.now
@@ -156,7 +156,7 @@ class Middleware
     return source, message
   end
 
-  def send_message(client, *message)
+  def send_message(client, message)
     @logger.debug "sending #{message.inspect} to #{client.id}"
     @socket_mutex.synchronize do
       @socket.send_strings([ client.id, '', *message ], ZMQ::DONTWAIT)
@@ -182,7 +182,7 @@ class Middleware
         @clients.values.select { |x| x.ttl && x.next_send_by }.each do |client|
           if now >= client.next_send_by
             @logger.info "heartbeat_send_thread: sending to #{client.id}"
-            send_message(client, 'NOOP')
+            send_message(client, [ 'NOOP' ])
           end
         end
         first_to_send = @clients.values.collect { |x| x.ttl && x.next_send_by }.min
