@@ -18,10 +18,23 @@ module MCollective
 
       def initialize
         @endpoint = get_option('zeromq.middleware')
-        @keepalive_interval = get_option('zeromq.heartbeat', 10)
-        @last_recv = Time.now
+        @heartbeat = Integer(get_option('zeromq.heartbeat', '10'))
 
         @context = ZMQ::Context.new
+        @socket = nil
+        @socket_mutex = Mutex.new
+        @subscriptions = []
+
+        if get_bool_option('zeromq.curve.enabled', true)
+          # load the curve keys
+          @middleware_public = IO.read(get_option('zeromq.curve.middleware_public_key')).chomp
+          @our_public  = IO.read(get_option('zeromq.curve.public_key')).chomp
+          @our_private = IO.read(get_option('zeromq.curve.private_key')).chomp
+        end
+      end
+
+      def connect
+        Log.debug("creating new socket")
         @socket = @context.socket(ZMQ::DEALER)
 
         # set an identity based on the identity, pid, and thread.id of this context
@@ -31,42 +44,47 @@ module MCollective
         assert_zeromq(@socket.setsockopt(ZMQ::LINGER, 0))
 
         if get_bool_option('zeromq.curve.enabled', true)
-          # load the curve keys
-          middleware_public = IO.read(get_option('zeromq.curve.middleware_public_key')).chomp
-          our_public  = IO.read(get_option('zeromq.curve.public_key')).chomp
-          our_private = IO.read(get_option('zeromq.curve.private_key')).chomp
-
           # key the socket
-          @socket.setsockopt(ZMQ::CURVE_SERVERKEY, middleware_public)
-          @socket.setsockopt(ZMQ::CURVE_PUBLICKEY, our_public)
-          @socket.setsockopt(ZMQ::CURVE_SECRETKEY, our_private)
+          @socket.setsockopt(ZMQ::CURVE_SERVERKEY, @middleware_public)
+          @socket.setsockopt(ZMQ::CURVE_PUBLICKEY, @our_public)
+          @socket.setsockopt(ZMQ::CURVE_SECRETKEY, @our_private)
         end
-      end
 
-      def connect
         Log.debug("connecting @socket to #{@endpoint}'")
         assert_zeromq(@socket.connect(@endpoint))
 
         options = {
           'VERSION' => '0.2',
+          'TTL'     => (@heartbeat * 1000).to_s,
         }
-
-        if @keepalive_interval
-          options['TTL'] = (@keepalive_interval * 1000).to_s
-        end
 
         send_message([ 'CONNECT', options.to_a ].flatten)
 
-        @keepalive_thread = Thread.new do
-          #keepalive_thread
+        if !@subscriptions.empty?
+          # reconnection, resub
+          send_message([ 'SUB', @subscriptions ].flatten)
+        end
+
+        @last_recv = nil
+        @next_recv_by = Time.now + @heartbeat
+        if !@heartbeat_thread
+          Log.debug("spawning a monitoring thread")
+          @heartbeat_thread = Thread.new { heartbeat_thread }
         end
       end
 
-      def disconnect
+      def disconnect(kill_thread = true)
         Log.debug('disconnecting')
+        if kill_thread
+          @keepalive_thread.kill
+        end
+
         send_message([ 'DISCONNECT' ])
         sleep 0.5 # allow for DISCONNECT to be queued/delivered
-        assert_zeromq(@socket.close)
+        @socket_mutex.synchronize do
+          assert_zeromq(@socket.close)
+        end
+        @socket = nil
         Log.debug('disconnected')
       end
 
@@ -75,6 +93,7 @@ module MCollective
         topic = topic_for_kind(agent, type, collective)[:topic]
         Log.debug("subscribing to topic '#{topic}'")
         send_message([ 'SUB', topic ])
+        @subscriptions += [ topic ]
       end
 
       def unsubscribe(agent, type, collective)
@@ -83,6 +102,7 @@ module MCollective
 
         Log.debug("unsubscribing from topic '#{topic}'")
         send_message([ 'UNSUB', topic ])
+        @subscriptions -= [ topic ]
       end
 
       def publish(message)
@@ -104,6 +124,7 @@ module MCollective
           Log.debug('receive a message from zeromq')
           message = recv_message
           @last_recv = Time.now
+          @next_recv_by = @last_recv + @heartbeat
 
           kind = message.shift
           Log.debug("got a #{kind}")
@@ -228,38 +249,65 @@ module MCollective
 
       def send_message(message)
         Log.debug "sending #{message.inspect}"
-        assert_zeromq(@socket.send_strings([''] + message, ZMQ::DONTWAIT))
+        @socket_mutex.synchronize do
+          assert_zeromq(@socket.send_strings([''] + message, ZMQ::DONTWAIT))
+        end
         Log.debug 'sent'
       end
 
       def recv_message
         response = []
-        assert_zeromq(@socket.recv_strings(response))
+        poller = ZMQ::Poller.new
+        poller.register_readable(@socket)
+        poller.poll
+        if poller.readables.empty?
+          # We probably woke up because the connection was closed.  Raise a backoff error
+          raise MessageNotReceived.new(10), "Socket didn't become readable"
+        end
+
+        @socket_mutex.synchronize do
+          Log.debug 'doing read'
+          assert_zeromq(@socket.recv_strings(response))
+        end
         # as we're now a DEALER first frame is ''
         response.shift
         Log.debug "got #{response.inspect}"
         return response
       end
 
-      def keepalive_thread
-        while true
-          heard = Time.now - @last_recv
-          Log.debug "last heard from middleware #{heard} seconds ago"
-          if heard > @keepalive_interval
-            Log.warn "haven't heard from middleware in #{heard} seconds, reconnecting"
-            disconnect
-            sleep 1
-            connect
-          end
+      def heartbeat_thread
+        begin
+          while true
+            if Time.now > @next_recv_by
+              # try and stimulate the connection with a PING
+              send_message([ 'PING' ])
+              sleep 1 # allow PONG to be handled in the main thread
+            end
 
-          time_till_next = @keepalive_interval - heard
-          if time_till_next > 0
-            Log.debug "sleeping up #{time_till_next} seconds until keepalive"
-            sleep time_till_next
+            now = Time.now
+            if now > @next_recv_by
+              last_heard = 'never'
+              if @last_recv
+                last_heard = "#{now - @last_recv} seconds ago"
+              end
+
+              Log.warn "Last heard from the middleware #{last_heard}.  Reconnecting."
+              # disconnect(false), don't shoot the keepalive thread (ourself) in the face
+              disconnect(false)
+              sleep 1
+              connect
+            end
+
+            time_to_wait = @next_recv_by - Time.now
+            if time_to_wait > 0
+              Log.debug "sleeping for #{time_to_wait} seconds"
+              sleep time_to_wait
+            end
           end
+        rescue Exception => e
+          Log.error "error in heartbeat_thread: #{e}"
         end
       end
-
 
       def assert_zeromq(rc)
         return if ZMQ::Util.resultcode_ok?(rc)

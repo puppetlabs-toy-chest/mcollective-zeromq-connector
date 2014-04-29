@@ -74,6 +74,9 @@ A value in milliseconds for (a) how often to expect to recieve a command from
 this client (b) how often the middleware should consider sending a PING/PONG
 pair.
 
+If the client isn't heard from in this time the middleware may consider the
+client absent.
+
 ## DISCONNECT
 
     [ 'DISCONNECT' ]
