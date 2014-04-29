@@ -46,6 +46,12 @@ verb ERROR.
 The IDENTIFIER is optional, but if supplied MUST be supplied with the
 response.
 
+## NOOP
+
+    [ 'NOOP' ]
+
+An empty message used for heartbeating.
+
 # Message originated by the connector (client)
 
 In the following sections the first message is the frame to send, represented
@@ -100,6 +106,9 @@ required, but may be an empty string ('') if no reply-to is appropriate.
 
 ## MESSAGE
 
-    [ 'MESSAGE', TOPIC, REPLY_TO, BODY ] | [ 'OK', 'WAIT' ] | [ 'FAIL', REASON ]
+    [ 'MESSAGE', TOPIC, REPLY_TO, BODY ]
 
+## ERROR
+
+    [ 'ERROR', DESCRIPTION ]
 

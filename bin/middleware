@@ -4,6 +4,14 @@ require 'logger'
 require 'optparse'
 
 class Middleware
+  class Client
+    attr_accessor :id
+    attr_accessor :ttl
+    attr_accessor :subscriptions
+    attr_accessor :last_recv, :next_recv_by
+    attr_accessor :last_send, :next_send_by
+  end
+
   def initialize(options)
     @recv_count = 0
     @send_count = 0
@@ -15,6 +23,7 @@ class Middleware
 
     @context = ZMQ::Context.new
     @socket = @context.socket(ZMQ::ROUTER)
+    @socket_mutex = Mutex.new
 
     if options.include?(:curve_private_key)
       @logger.debug "enabling curve with private key '#{options[:curve_private_key]}'"
@@ -34,12 +43,13 @@ class Middleware
 
   def main_loop
     @logger.info "going into mainloop"
+    start_heartbeat_threads
 
     poller = ZMQ::Poller.new
     assert_zeromq(poller.register_readable(@socket))
 
     while true
-      # TODO - figure out next ping, and set polling based on this
+      # TODO - figure out next ping we to get, and set polling based on this
       @logger.debug "polling for messages"
       poller.poll
       @logger.debug "poller woke up"
@@ -52,6 +62,14 @@ class Middleware
         # Message to route
         source, message = read_message
 
+        client = @clients[source]
+        if client.nil?
+          client = Client.new
+          client.id = source
+          client.subscriptions = []
+          @clients[client.id] = client
+        end
+
         begin
           verb = message.shift
 
@@ -60,50 +78,50 @@ class Middleware
             options = Hash[*message]
             # TODO(richardc): versioncmp
             @logger.info "CONNECT '#{source}' #{options.inspect}"
-
-            @clients[source] = {
-              :id => source,
-              :ttl => Integer(options['TTL']),
-              :subscriptions => [],
-              :next_heartbeat => nil, # may be set at end of loop
-            }
+            client.ttl = Integer(options['TTL'])
+            if client.ttl
+              client.next_send_by = Time.now + (0.95 * (client.ttl / 1000.0))
+            end
 
           when 'DISCONNECT'
             @logger.info "DISCONNECT '#{source}'"
-            @clients.delete(source)
-            next # skip the 'update last heard'
+            @clients.delete(client.id)
 
           when 'SUB'
-            @clients[source][:subscriptions] += message
+            client.subscriptions += message
 
           when 'UNSUB'
-            @clients[source][:subscriptions] -= message
+            client.subscriptions -= message
 
           when 'PUT'
             topic = message.first
             count = 0
-            @clients.values.select { |x| x[:subscriptions].include?(topic) }.each do |client|
+            @clients.values.select { |x| x.subscriptions.include?(topic) }.each do |subscriber|
               count += 1
-              send_message(client[:id], 'MESSAGE', *message)
+              send_message(subscriber, 'MESSAGE', *message)
             end
-            @logger.info "forwarded message on '#{topic}' from '#{source}' to #{count} recipients"
+            @logger.info "forwarded message on '#{topic}' from '#{client.id}' to #{count} recipients"
 
           when 'PING'
-            send_message(source, 'PONG', *message)
+            send_message(client, 'PONG', *message)
 
           when 'PONG'
             # possibly update state to indicate an outstanding PING has been acked
 
+          when 'NOOP'
+            # yeah, whatever
+
           else
             @logger.error "Don't know how to handle '#{verb}', saying FAIL"
-            send_message(source, 'ERROR', 'Unknown verb')
+            send_message(client, 'ERROR', 'Unknown verb')
           end
         rescue Exception => e
-          send_message(source, 'ERROR', "caught exception: #{e}")
+          send_message(client, 'ERROR', "caught exception: #{e}")
         end
 
-        if @clients[source] && @clients[source][:ttl]
-          @clients[source][:next_heartbeat] = Time.now + (@clients[source][:ttl] / 1000.0)
+        client.last_recv = Time.now
+        if client.ttl
+          client.next_recv_by = Time.now + (1.05 * (client.ttl / 1000.0))
         end
       end
     end
@@ -128,7 +146,9 @@ class Middleware
   def read_message
     @logger.debug 'going to read message'
     message = []
-    assert_zeromq(@socket.recv_strings(message))
+    @socket_mutex.synchronize do
+      assert_zeromq(@socket.recv_strings(message))
+    end
     source = message.slice!(0,2)[0]
 
     @recv_count += 1
@@ -136,11 +156,71 @@ class Middleware
     return source, message
   end
 
-  def send_message(target, *message)
-    @logger.debug "sending #{message.inspect} to #{target.inspect}"
-    @socket.send_strings([ target, '', *message ], ZMQ::DONTWAIT)
+  def send_message(client, *message)
+    @logger.debug "sending #{message.inspect} to #{client.id}"
+    @socket_mutex.synchronize do
+      @socket.send_strings([ client.id, '', *message ], ZMQ::DONTWAIT)
+    end
     @logger.debug 'sent message'
+    client.last_send = Time.now
+    if client.ttl
+      client.next_send_by = Time.now + (0.95 * (client.ttl / 1000.0))
+    end
     @send_count += 1
+  end
+
+  def start_heartbeat_threads
+    Thread.new { heartbeat_send_thread }
+    Thread.new { heartbeat_recv_thread }
+  end
+
+  def heartbeat_send_thread
+    begin
+      while true
+        @logger.debug 'heartbeat_send_thread: checking'
+        now = Time.now
+        @clients.values.select { |x| x.ttl && x.next_send_by }.each do |client|
+          if now >= client.next_send_by
+            @logger.info "heartbeat_send_thread: sending to #{client.id}"
+            send_message(client, 'NOOP')
+          end
+        end
+        first_to_send = @clients.values.collect { |x| x.ttl && x.next_send_by }.min
+
+        sleep_for = first_to_send ? (first_to_send - now) : 1
+        if sleep_for > 0
+          @logger.debug "heartbeat_send_thread: sleeping for #{sleep_for} seconds"
+          sleep sleep_for
+        end
+      end
+    rescue Exception => e
+      @logger.error "heartbeat_send_thread: #{e} #{e.backtrace}"
+      retry
+    end
+  end
+
+  def heartbeat_recv_thread
+    begin
+      while true
+        now = Time.now
+        @clients.values.select { |x| x.ttl && x.next_recv_by }.each do |client|
+          if now >= client.next_recv_by
+            @logger.info "heartbeat_recv_thread: '#{client.id}' has gone away, deleting"
+            @clients.delete(client.id)
+          end
+        end
+        first_to_recv = @clients.values.collect { |x| x.ttl && x.next_recv_by }.min
+
+        sleep_for = first_to_recv ? (first_to_recv - now) : 1
+        if sleep_for > 0
+          @logger.debug "heartbeat_recv_thread: sleeping for #{sleep_for} seconds"
+          sleep sleep_for
+        end
+      end
+    rescue Exception => e
+      @logger.error "heartbeat_send_thread: #{e}"
+      retry
+    end
   end
 
   def assert_zeromq(rc)

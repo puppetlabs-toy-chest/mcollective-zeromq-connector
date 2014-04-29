@@ -65,12 +65,7 @@ module MCollective
           send_message([ 'SUB', @subscriptions ].flatten)
         end
 
-        @last_recv = nil
-        @next_recv_by = Time.now + @heartbeat
-        if !@heartbeat_thread
-          Log.debug("spawning a monitoring thread")
-          @heartbeat_thread = Thread.new { heartbeat_thread }
-        end
+        start_heartbeat_threads
       end
 
       def disconnect(kill_thread = true)
@@ -127,9 +122,8 @@ module MCollective
           @next_recv_by = @last_recv + @heartbeat
 
           kind = message.shift
-          Log.debug("got a #{kind}")
-
           case kind
+          when 'NOOP'
           when 'PING'
             send_message([ 'PONG', *message ])
 
@@ -144,6 +138,8 @@ module MCollective
             end
             Log.debug("message on '#{topic}' with #{headers.inspect}")
             return Message.new(body, nil, :headers => headers)
+          else
+            Log.error("Unexpected message '#{kind}' from middleware: #{message.inspect}")
           end
         end
       end
@@ -252,6 +248,7 @@ module MCollective
         @socket_mutex.synchronize do
           assert_zeromq(@socket.send_strings([''] + message, ZMQ::DONTWAIT))
         end
+        @next_send_by = Time.now + (@heartbeat * 0.95)
         Log.debug 'sent'
       end
 
@@ -269,26 +266,69 @@ module MCollective
           Log.debug 'doing read'
           assert_zeromq(@socket.recv_strings(response))
         end
+        @last_recv = Time.now
+        @next_recv_by = Time.now + (@heartbeat * 1.05)
         # as we're now a DEALER first frame is ''
         response.shift
         Log.debug "got #{response.inspect}"
         return response
       end
 
-      def heartbeat_thread
+      def start_heartbeat_threads
+        if !@heartbeat_send_thread
+          Log.debug("spawning the heartbeat_send_thread")
+          @heartbeat_send_thread = Thread.new { heartbeat_send_thread }
+        end
+
+        @last_recv = nil
+        @next_recv_by = Time.now + @heartbeat
+        if !@heartbeat_recv_thread
+          Log.debug("spawning the heartbeat_expected_thread")
+          @heartbeat_recv_thread = Thread.new { heartbeat_recv_thread }
+        end
+      end
+
+      def stop_heartbeat_threads
+        if @heartbeat_send_thread
+          @heartbeat_send_thread.kill
+          @heartbeat_send_thread = nil
+        end
+
+        if @heartbeat_recv_thread
+          @heartbeat_recv_thread.kill
+          @heartbeat_recv_thread = nil
+        end
+      end
+
+      # This thread ensure we keep saying something
+      def heartbeat_send_thread
         begin
           while true
-            if Time.now > @next_recv_by
-              # try and stimulate the connection with a PING
-              send_message([ 'PING' ])
-              sleep 1 # allow PONG to be handled in the main thread
+            if Time.now >= @next_send_by
+              Log.debug "heartbeat_send_thread: announcing ourself to the world"
+              send_message([ 'NOOP' ])
             end
 
-            now = Time.now
-            if now > @next_recv_by
+            sleep_for = @next_send_by - Time.now
+            if sleep_for > 0
+              Log.debug "heartbeat_send_thread: sleeping #{sleep_for} seconds"
+              sleep sleep_for
+            end
+          end
+        rescue Exception => e
+          Log.error "heartbeat_send_thread: #{e}"
+          retry
+        end
+      end
+
+      # This thread expects messages to come to us
+      def heartbeat_recv_thread
+        begin
+          while true
+            if Time.now >= @next_recv_by
               last_heard = 'never'
               if @last_recv
-                last_heard = "#{now - @last_recv} seconds ago"
+                last_heard = "#{Time.now - @last_recv} seconds ago"
               end
 
               Log.warn "Last heard from the middleware #{last_heard}.  Reconnecting."
@@ -298,14 +338,15 @@ module MCollective
               connect
             end
 
-            time_to_wait = @next_recv_by - Time.now
-            if time_to_wait > 0
-              Log.debug "sleeping for #{time_to_wait} seconds"
-              sleep time_to_wait
+            sleep_for = @next_recv_by - Time.now
+            if sleep_for > 0
+              Log.debug "heartbeat_recv_thread: sleeping for #{sleep_for} seconds"
+              sleep sleep_for
             end
           end
         rescue Exception => e
-          Log.error "error in heartbeat_thread: #{e}"
+          Log.error "heartbeat_send_thread: #{e}"
+          retry
         end
       end
 
