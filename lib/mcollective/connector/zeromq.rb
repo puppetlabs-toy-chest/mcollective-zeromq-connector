@@ -68,10 +68,10 @@ module MCollective
         start_heartbeat_threads
       end
 
-      def disconnect(kill_thread = true)
+      def disconnect(stop_threads = true)
         Log.debug('disconnecting')
-        if kill_thread
-          @keepalive_thread.kill
+        if stop_threads
+          stop_heartbeat_threads
         end
 
         send_message([ 'DISCONNECT' ])
