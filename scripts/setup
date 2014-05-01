@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 require 'thor'
 require 'pathname'
+require 'progress_bar'
 
 class Setup < Thor
   # Making demo environments is a bit fiddly as you have to set up a config file
@@ -41,14 +42,15 @@ class Setup < Thor
 
     make_procfile(directory, options, roles)
 
+    bar = ProgressBar.new(roles.size)
     roles.each do |node|
       if options[:curve]
         # generate curve key
-        puts "keypair for #{node}"
         make_curve_keypair((directory + node).to_s)
       end
 
       make_mcollective_config(directory, options, node)
+      bar.increment!
     end
 
     make_client(directory, options)
