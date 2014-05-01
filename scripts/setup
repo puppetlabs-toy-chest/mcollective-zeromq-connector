@@ -23,6 +23,10 @@ class Setup < Thor
                 :default => true,
                 :desc => 'Set up curve?'
 
+  method_option :middleware,
+                :default => (Pathname.new(__FILE__).realpath.parent + 'middleware').to_s,
+                :desc => 'The middleware to use'
+
   def make_demo(directory)
     directory = Pathname.new(directory)
     puts "making a demo in '#{directory}' with #{options[:number_of_servers]} servers"
@@ -77,9 +81,9 @@ class Setup < Thor
         case role
         when 'middleware'
           if options[:curve]
-            file.puts "middleware: #{pwd + 'scripts/middleware'} --curve-private-key middleware.private"
+            file.puts "middleware: #{options[:middleware]} --curve-private-key middleware.private"
           else
-            file.puts "middleware: #{pwd + 'scripts/middleware'}"
+            file.puts "middleware: #{options[:middleware]}"
           end
         when /^server-/
           file.puts "#{role}: ruby -I #{options[:mcollective]}/lib #{options[:mcollective]}/bin/mcollectived --config #{role}.cfg"
