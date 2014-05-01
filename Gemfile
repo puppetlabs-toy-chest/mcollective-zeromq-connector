@@ -1,10 +1,10 @@
 source 'https://rubygems.org'
 
-gem 'msgpack'
 gem 'ffi-rzmq'
 
 group :devel do
-  gem 'awesome_print'
+  gem 'thor'
+  gem 'foreman'
 end
 
 group :test do

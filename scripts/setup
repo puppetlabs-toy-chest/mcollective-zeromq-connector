@@ -1,4 +1,8 @@
-class Helpers < Thor
+#!/usr/bin/env ruby
+require 'thor'
+require 'pathname'
+
+class Setup < Thor
   # Making demo environments is a bit fiddly as you have to set up a config file
   # for each role, and foreman doesn't paramterise nicely, so generate the
   # entire thing
@@ -73,9 +77,9 @@ class Helpers < Thor
         case role
         when 'middleware'
           if options[:curve]
-            file.puts "middleware: #{pwd + 'bin/middleware'} --curve-private-key middleware.private"
+            file.puts "middleware: #{pwd + 'scripts/middleware'} --curve-private-key middleware.private"
           else
-            file.puts "middleware: #{pwd + 'bin/middleware'}"
+            file.puts "middleware: #{pwd + 'scripts/middleware'}"
           end
         when /^server-/
           file.puts "#{role}: ruby -I #{options[:mcollective]}/lib #{options[:mcollective]}/bin/mcollectived --config #{role}.cfg"
@@ -127,3 +131,5 @@ plugin.zeromq.curve.private_key = #{node}.private
     mco.chmod(0755)
   end
 end
+
+Setup.start
