@@ -1,6 +1,6 @@
 # ZeroMQ MCollective protocol, version 0.2
 
-This is a DRAFT of the protocol for ZeroMQ MCollective protocol 0.2.  It'll
+This is a DRAFT of the protocol for ZeroMQ MCollective protocol 0.3.  It'll
 probably move as it's implemented.
 
 Here we describe a simple protocol that the zeromq connector and custom
@@ -30,6 +30,32 @@ http://rfc.zeromq.org/spec:25.
 The general message format will be that of multi-part message frame.  We
 choose to use simple strings for the message parts for interoperbility.
 
+## Message structure
+
+The general format of a request frame will be;
+
+    [ VERB KEY1 VAL1 "" POSITIONAL ]
+
+Which is to say a command verb followed by 0 or more key value 'header' pairs,
+optionally followed by the empty string and any positional parameters.
+
+## Reserved Headers
+
+We reserve all headers apart from those prefixed with "X-".  The defined global
+header for this is:
+
+### ID
+
+A unique id for the command.  If supplied the broker SHALL reply with an OK or
+ERROR response including the value of this token.  It is assumed the client
+will use a unique identifier for each request for verification of successful
+command submission, but this is not required.
+
+Example:
+
+    [ 'NOOP', 'ID', '1234' ]
+    [ 'OK', 'ID', '1234 '] | [ 'ERROR', 'ID', '1234' ]
+
 # General message flow
 
 A client will send a request and expect nothing back if nothing exceptional
@@ -37,14 +63,6 @@ occured.  In an exceptional case the middleware should send a frame with the
 verb ERROR.
 
 # Messages originated by either end
-
-## PING
-
-    [ 'PING', IDENTIFIER ]
-    [ 'PONG', IDENTIFIER ]
-
-The IDENTIFIER is optional, but if supplied MUST be supplied with the
-response.
 
 ## NOOP
 
@@ -69,16 +87,15 @@ All values after the initial CONNECT verb are to be intepreted as a dictionary
 of connection parameters in no specific order expressed as a list of k,v,k,v.
 The parameters have the following semantics:
 
-### VERSION
+### VERSION key
 
 The version of this protocol in use.  It may confer other semantics onto how
 to intepret messages.
 
-### TTL
+### TTL key
 
 A value in milliseconds for (a) how often to expect to recieve a command from
-this client (b) how often the middleware should consider sending a PING/PONG
-pair.
+this client (b) how often the middleware should consider sending a NOOP.
 
 If the client isn't heard from in this time the middleware may consider the
 client absent.
@@ -89,26 +106,29 @@ client absent.
 
 ## SUB
 
-    [ 'SUB', 'topic1', 'topic2' ]
+    [ 'SUB', '', 'topic1', 'topic2' ]
 
 ## UNSUB
 
-    [ 'UNSUB', 'topic1', 'topic2' ]
+    [ 'UNSUB', '', 'topic1', 'topic2' ]
 
 ## PUT
 
-    [ 'PUT', TOPIC, REPLY_TO, BODY ]
+    [ 'PUT', 'TOPIC', 'topic1', '', body ]
 
-Submits a message to all consumbers of the named TOPIC.  The REPLY_TO field is
-required, but may be an empty string ('') if no reply-to is appropriate.
+Submits a message to all subscribers of the named 'TOPIC'.
 
 # Messages originating from the middleware
 
 ## MESSAGE
 
-    [ 'MESSAGE', TOPIC, REPLY_TO, BODY ]
+    [ 'MESSAGE', 'TOPIC', topic, '', body ]
 
 ## ERROR
 
-    [ 'ERROR', DESCRIPTION ]
+    [ 'ERROR', 'MESSAGE', DESCRIPTION ]
+
+## OK
+
+    [ 'OK', 'ID', identity ]
 

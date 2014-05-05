@@ -1,7 +1,5 @@
 require 'ffi-rzmq'
-require 'msgpack'
-
-  $stdout.sync = true
+require 'securerandom'
 
 module MCollective
   module Connector
@@ -53,16 +51,21 @@ module MCollective
         Log.debug("connecting @socket to #{@endpoint}'")
         assert_zeromq(@socket.connect(@endpoint))
 
+        id = make_command_id
         options = {
           'VERSION' => '0.2',
           'TTL'     => (@heartbeat * 1000).to_s,
+          'ID'      => id,
         }
 
-        send_message([ 'CONNECT', options.to_a ].flatten)
+        send_message([ 'CONNECT' ] + options.to_a.flatten)
+        expect_ok_with(id)
 
         if !@subscriptions.empty?
           # reconnection, resub
-          send_message([ 'SUB', @subscriptions ].flatten)
+          id = make_command_id
+          send_message([ 'SUB', 'ID', id, '' ] + @subscriptions)
+          expect_ok_with(id)
         end
 
         start_heartbeat_threads
@@ -84,19 +87,22 @@ module MCollective
       end
 
       def subscribe(agent, type, collective)
-        Log.debug('subscribe')
-        topic = topic_for_kind(agent, type, collective)[:topic]
+        topic = topic_for_kind(agent, type, collective)
+
         Log.debug("subscribing to topic '#{topic}'")
-        send_message([ 'SUB', topic ])
+        id = make_command_id
+        send_message([ 'SUB', 'ID', id, '', topic ])
+        expect_ok_with(id)
         @subscriptions += [ topic ]
       end
 
       def unsubscribe(agent, type, collective)
-        Log.debug('unsubscribe')
-        topic = topic_for_kind(agent, type, collective)[:topic]
+        topic = topic_for_kind(agent, type, collective)
 
         Log.debug("unsubscribing from topic '#{topic}'")
-        send_message([ 'UNSUB', topic ])
+        id = make_command_id
+        send_message([ 'UNSUB', 'ID', id, '', topic ])
+        expect_ok_with(id)
         @subscriptions -= [ topic ]
       end
 
@@ -121,33 +127,34 @@ module MCollective
           @last_recv = Time.now
           @next_recv_by = @last_recv + @heartbeat
 
-          kind = message.shift
-          case kind
+          verb = message.shift
+          case verb
           when 'NOOP'
-          when 'PING'
-            send_message([ 'PONG', *message ])
+            # silently accept
 
           when 'MESSAGE'
-            topic = message.shift
-            reply_to = message.shift
-            body = message.shift
-
-            headers = {}
-            if reply_to != ''
-              headers[:reply_to] = reply_to
+            if end_of_headers = message.index('')
+              headers = Hash[*message.first(end_of_headers)]
+              body = message.drop(end_of_headers + 1)
+            else
+              headers = Hash[*message]
+              body = []
             end
-            Log.debug("message on '#{topic}' with #{headers.inspect}")
-            return Message.new(body, nil, :headers => headers)
+
+            Log.debug("MESSAGE received with #{headers.inspect}")
+            return Message.new(body[0], nil, :headers => headers)
+
           else
-            Log.error("Unexpected message '#{kind}' from middleware: #{message.inspect}")
+            Log.error("Unexpected message '#{verb}' from middleware: #{message.inspect}")
           end
         end
       end
 
       private
 
-      # topic_for_message and topic_for_kind e the behaviour of the activemq
-      # connector a little.  As it's fresh here's a braindump
+      # headers_for_message, headers_for_kind, and topic_for_kind ape the
+      # behaviour of the activemq connector a little.  As it's fresh here's a
+      # braindump
       #
       # The problem is you need to be able to compute a topic/queue name in a
       # certain number of situations:
@@ -185,62 +192,59 @@ module MCollective
       # mechanism by which we can send a response at all, and is in no other
       # part of the message. (it's message.request.headers['reply_to'])
 
-      # the topic we should send this message on
-      def topic_for_message(message, target = nil)
+      # the headers we should use when sending this message
+      def headers_for_message(message, target = nil)
         case message.type
         when :reply
           {
-            :topic => message.request.headers[:reply_to],
-            :reply_to => '',
+            'TOPIC' => message.request.headers['X-REPLY-TO'],
           }
         else
-          topic_for_kind(message.agent, message.type, message.collective, target)
+          headers_for_kind(message.agent, message.type, message.collective, target)
         end
       end
 
-      # the topic we should subscribe to for messages of this type
-      def topic_for_kind(agent, type, collective, target = nil)
+      def headers_for_kind(agent, type, collective, target = nil)
         reply_to = "#{collective} reply #{Config.instance.identity} #{$$}"
-        envelope = {
-          :topic => nil,
-          :reply_to => '',
-        }
+        headers = {}
         case type
         when :reply
-          envelope[:topic] = reply_to
+          headers['TOPIC'] = reply_to
 
         when :broadcast, :request
-          envelope[:topic] = "#{collective} #{agent}"
-          envelope[:reply_to] = reply_to
+          headers['TOPIC'] = "#{collective} #{agent}"
+          headers['X-REPLY-TO'] = reply_to
 
         when :direct_request
           # When we send a directed message
-          envelope[:topic] = "#{collective} nodes #{target}"
-          envelope[:reply_to] = reply_to
+          headers['TOPIC'] = "#{collective} nodes #{target}"
+          headers['X-REPLY-TO'] = reply_to
 
         when :directed
           # Where we listen for directed messages
-          envelope[:topic] = "#{collective} nodes #{Config.instance.identity}"
+          headers['TOPIC'] = "#{collective} nodes #{Config.instance.identity}"
 
         else
           raise "Unknown message type #{type}"
         end
 
-        envelope
+        headers
+      end
+
+      def topic_for_kind(agent, type, collective)
+        headers_for_kind(agent, type, collective)['TOPIC']
       end
 
       def publish_message(message, node = nil)
-        envelope = topic_for_message(message, node)
-        topic = envelope[:topic]
-        reply_to = envelope[:reply_to]
+        headers = headers_for_message(message, node)
 
         if node
-          Log.debug("sending direct message to '#{node}' on '#{topic}' with reply_to '#{reply_to}'")
+          Log.debug("sending direct message to '#{node}' with headers '#{headers.inspect}'")
         else
-          Log.debug("sending message on '#{topic}' with reply_to '#{reply_to}'")
+          Log.debug("sending broadcast message with headers '#{headers.inspect}'")
         end
 
-       send_message(['PUT', topic, reply_to, message.payload])
+        send_message([ 'PUT' ] + headers.to_a.flatten + [ '', message.payload ])
       end
 
       def send_message(message)
@@ -321,7 +325,7 @@ module MCollective
         end
       end
 
-      # This thread expects messages to come to us
+      # This thread expects messages to come to us, reconnects if it didn't
       def heartbeat_recv_thread
         begin
           while true
@@ -347,6 +351,19 @@ module MCollective
         rescue Exception => e
           Log.error "heartbeat_send_thread: #{e}"
           retry
+        end
+      end
+
+      def make_command_id
+        SecureRandom.uuid
+      end
+
+      def expect_ok_with(id)
+        message = recv_message
+        verb = message.shift
+        headers = Hash[*message]
+        if verb != 'OK' || headers['ID'] != id
+          raise MessageNotReceived.new(10), "Didn't receive the expected OK frame"
         end
       end
 

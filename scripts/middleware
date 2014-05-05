@@ -72,13 +72,25 @@ class Middleware
 
         begin
           verb = message.shift
+          if end_of_headers = message.index('')
+            headers = Hash[*message.first(end_of_headers)]
+            body = message.drop(end_of_headers + 1)
+          else
+            headers = Hash[*message]
+            body = []
+          end
+
+          if headers['ID']
+            id = [ 'ID', headers['ID'] ]
+          else
+            id = []
+          end
 
           case verb
           when 'CONNECT'
-            options = Hash[*message]
             # TODO(richardc): versioncmp
-            @logger.info "CONNECT '#{source}' #{options.inspect}"
-            client.ttl = Integer(options['TTL'])
+            @logger.info "CONNECT '#{source}' #{headers.inspect}"
+            client.ttl = Integer(headers['TTL'])
             if client.ttl
               client.next_send_by = Time.now + (0.95 * (client.ttl / 1000.0))
             end
@@ -88,35 +100,37 @@ class Middleware
             @clients.delete(client.id)
 
           when 'SUB'
-            client.subscriptions += message
+            client.subscriptions += body
 
           when 'UNSUB'
-            client.subscriptions -= message
+            client.subscriptions -= body
 
           when 'PUT'
-            topic = message.first
+            topic = headers['TOPIC']
             count = 0
+            payload = [ 'MESSAGE' ] + headers.reject{ |k,v| k == 'ID' }.to_a.flatten + [ '' ] + body
             @clients.values.select { |x| x.subscriptions.include?(topic) }.each do |subscriber|
               count += 1
-              send_message(subscriber, [ 'MESSAGE' ] + message)
+              send_message(subscriber, payload)
             end
             @logger.info "forwarded message on '#{topic}' from '#{client.id}' to #{count} recipients"
-
-          when 'PING'
-            send_message(client, [ 'PONG' ] + message)
-
-          when 'PONG'
-            # possibly update state to indicate an outstanding PING has been acked
 
           when 'NOOP'
             # yeah, whatever
 
           else
-            @logger.error "Don't know how to handle '#{verb}', saying FAIL"
-            send_message(client, [ 'ERROR', 'Unknown verb' ])
+            @logger.error "Don't know how to handle '#{verb}', saying ERROR"
+            send_message(client, [ 'ERROR', 'MESSAGE', 'Unknown verb' ] + id)
           end
+
+          if !id.empty?
+            # request for acknowledgement
+            send_message(client, [ 'OK' ] + id)
+          end
+
         rescue Exception => e
-          send_message(client, [ 'ERROR', "caught exception: #{e}" ])
+          @logger.error "Caught exception #{e}"
+          send_message(client, [ 'ERROR', 'MESSAGE', "caught exception: #{e} #{e.backtrace}" ] + id)
         end
 
         client.last_recv = Time.now
