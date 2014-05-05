@@ -90,9 +90,11 @@ class Middleware
           when 'CONNECT'
             # TODO(richardc): versioncmp
             @logger.info "CONNECT '#{source}' #{headers.inspect}"
-            client.ttl = Integer(headers['TTL'])
-            if client.ttl
-              client.next_send_by = Time.now + (0.95 * (client.ttl / 1000.0))
+            if headers['TTL']
+              client.ttl = Integer(headers['TTL'])
+              if client.ttl
+                client.next_send_by = Time.now + (0.95 * (client.ttl / 1000.0))
+              end
             end
 
           when 'DISCONNECT'
