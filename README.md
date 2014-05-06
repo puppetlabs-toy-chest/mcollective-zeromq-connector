@@ -13,21 +13,24 @@ implementation in `scripts/mc0d.rb`.
 ```
 libdir = $PATH_TO_HERE/lib
 connector = zeromq
-plugin.zeromq.middlware = tcp://192.168.1.1:61616
+plugin.zeromq.broker.host = 192.168.1.1
+plugin.zeromq.broker.port = 61614 # default is 61616
+plugin.zeromq.broker.public_key = /etc/mcollective/broker.public
+
 plugin.zeromq.keepalive = 1 # default is 5, time in seconds
-plugin.zeromq.curve.middleware_public_key = /etc/mcollective/middleware.public
-plugin.zeromq.curve.public_key = /etc/mcollective/this_actor.public
-plugin.zeromq.curve.private_key = /etc/mcollective/this_actor.private
+
+plugin.zeromq.public_key = /etc/mcollective/this_actor.public
+plugin.zeromq.private_key = /etc/mcollective/this_actor.private
 ```
 
-Then start the middleware from `scripts/mc0d.rb` on the middleware\_host
+Then start the broker from `scripts/mc0d.rb` on the broker.host
 
 Authentication is via Curve and on by default.  To disable this you have to
-use the option `plugin.zeromq.curve.enabled`
+use the option `plugin.zeromq.curve`
 
 ```
 # Not recommended, but for a quick demo possibly forgivable
-plugin.zeromq.curve.enabled = false
+plugin.zeromq.curve = false
 ```
 
 # TODO

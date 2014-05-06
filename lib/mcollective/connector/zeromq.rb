@@ -15,7 +15,9 @@ module MCollective
       #   "#{collective} nodes #{identity}"       - direct addressing to node
 
       def initialize
-        @endpoint = get_option('zeromq.middleware')
+        host = get_option('zeromq.broker.host')
+        port = get_option('zeromq.broker.port', '61616')
+        @endpoint = "tcp://#{host}:#{port}"
         @heartbeat = Integer(get_option('zeromq.heartbeat', '30'))
 
         @context = ZMQ::Context.new
@@ -23,11 +25,12 @@ module MCollective
         @socket_mutex = Mutex.new
         @subscriptions = []
 
-        if get_bool_option('zeromq.curve.enabled', true)
+        @curve_enabled =  get_bool_option('zeromq.curve', true)
+        if @curve_enabled
           # load the curve keys
-          @middleware_public = IO.read(get_option('zeromq.curve.middleware_public_key')).chomp
-          @our_public  = IO.read(get_option('zeromq.curve.public_key')).chomp
-          @our_private = IO.read(get_option('zeromq.curve.private_key')).chomp
+          @broker_public = IO.read(get_option('zeromq.broker.public_key')).chomp
+          @our_public  = IO.read(get_option('zeromq.public_key')).chomp
+          @our_private = IO.read(get_option('zeromq.private_key')).chomp
         end
       end
 
@@ -41,9 +44,9 @@ module MCollective
         # don't wait for messages to get delivered/received on close
         assert_zeromq(@socket.setsockopt(ZMQ::LINGER, 0))
 
-        if get_bool_option('zeromq.curve.enabled', true)
+        if @curve_enabled
           # key the socket
-          @socket.setsockopt(ZMQ::CURVE_SERVERKEY, @middleware_public)
+          @socket.setsockopt(ZMQ::CURVE_SERVERKEY, @broker_public)
           @socket.setsockopt(ZMQ::CURVE_PUBLICKEY, @our_public)
           @socket.setsockopt(ZMQ::CURVE_SECRETKEY, @our_private)
         end
@@ -58,7 +61,7 @@ module MCollective
           'ID'      => id,
         }
 
-        send_message([ 'CONNECT' ] + options.to_a.flatten)
+        send_message([ 'CONNECT' ] + options.to_a.sort.flatten)
         expect_ok_with(id)
 
         if !@subscriptions.empty?

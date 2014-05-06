@@ -111,18 +111,17 @@ plugin.psk = pies
 identity = #{node}
 
 connector = zeromq
-plugin.zeromq.middleware = tcp://127.0.0.1:61616
+plugin.zeromq.broker.host = 127.0.0.1
         """
       if options[:curve]
         file.puts """
-plugin.zeromq.curve.enabled = true
-plugin.zeromq.curve.middleware_public_key = middleware.public
-plugin.zeromq.curve.public_key  = #{node}.public
-plugin.zeromq.curve.private_key = #{node}.private
+plugin.zeromq.broker.public_key = middleware.public
+plugin.zeromq.public_key  = #{node}.public
+plugin.zeromq.private_key = #{node}.private
         """
       else
         # still have to say no to curve
-        file.puts "plugin.zeromq.curve.enabled = false"
+        file.puts "plugin.zeromq.curve = false"
       end
     end
   end
