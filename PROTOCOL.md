@@ -1,12 +1,12 @@
-# ZeroMQ MCollective protocol, version 0.2
+# Marionette Collective 0MQ (mc0) protocol, version 0.3
 
-This is a DRAFT of the protocol for ZeroMQ MCollective protocol 0.3.  It'll
-probably move as it's implemented.
+This is a DRAFT of the protocol for mc0 0.3.  It'll probably move
+as it's implemented.
 
 Here we describe a simple protocol that the zeromq connector and custom
-middleware will use when communicating.
+broker will use when communicating.
 
-We use a little of the RFC terminilogy here to describe the intended use, but
+We use a little of the RFC terminology here to describe the intended use, but
 not consistently.  I SHOULD fix that.  Sorry.
 
 # Basic topology

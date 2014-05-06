@@ -25,8 +25,8 @@ class Setup < Thor
                 :desc => 'Set up curve?'
 
   method_option :middleware,
-                :default => (Pathname.new(__FILE__).realpath.parent + 'middleware').to_s,
-                :desc => 'The middleware to use'
+                :default => (Pathname.new(__FILE__).realpath.parent + 'mc0d.rb').to_s,
+                :desc => 'The mc0d to use'
 
   def make_demo(directory)
     directory = Pathname.new(directory)
@@ -77,7 +77,6 @@ class Setup < Thor
   # having it's project name and main config file have distinct names (yes
   # bundler, I'm looking at you)
   def make_procfile(directory, options, roles)
-    pwd = Pathname.pwd
     File.open(directory + 'Procfile', 'w') do |file|
       roles.each do |role|
         case role
