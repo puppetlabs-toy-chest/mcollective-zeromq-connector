@@ -25,7 +25,7 @@ module MCollective
         Config.stub(:instance).and_return(config)
         Zeromq.any_instance.stub(:get_option).with('zeromq.broker.host').and_return('rspec.host')
         Zeromq.any_instance.stub(:get_option).with('zeromq.broker.port', '61616').and_return('61617')
-        Zeromq.any_instance.stub(:get_option).with('zeromq.heartbeat', '30').and_return('30')
+        Zeromq.any_instance.stub(:get_option).with('zeromq.heartbeat', '30').and_return('20')
         Zeromq.any_instance.stub(:get_bool_option).with('zeromq.curve', true).and_return(true)
         Zeromq.any_instance.stub(:get_option).with('zeromq.broker.public_key').and_return('middleware.public')
         Zeromq.any_instance.stub(:get_option).with('zeromq.public_key').and_return('instance.public')
@@ -61,7 +61,7 @@ module MCollective
         end
 
         it 'should set @heartbeat' do
-          connector.instance_variable_get(:@heartbeat).should == 30
+          connector.instance_variable_get(:@heartbeat).should == 20
         end
       end
 
@@ -93,7 +93,7 @@ module MCollective
           connector.should_receive(:make_command_id).and_return('rspec-command-id')
           connector.should_receive(:send_message).with([ 'CONNECT' ] + {
             'VERSION' => '0.2',
-            'TTL' => '30000',
+            'TTL' => '20000',
             'ID' => 'rspec-command-id',
           }.to_a.sort.flatten)
           connector.should_receive(:expect_ok_with).with('rspec-command-id')
