@@ -33,8 +33,9 @@ class Middleware
     end
 
     # start listening to the network
-    @logger.debug "binding #{options[:bind]}"
-    assert_zeromq(@socket.bind(options[:bind]))
+    endpoint = "tcp://#{options[:bind]}:#{options[:port]}"
+    @logger.debug "binding #{endpoint}"
+    assert_zeromq(@socket.bind(endpoint))
 
     Thread.new do
       status_thread
@@ -247,13 +248,18 @@ end
 
 
 options = {
-  :bind  => 'tcp://*:61616',
+  :bind => '*',
+  :port => 61616,
 }
 OptionParser.new do |opts|
   opts.banner = "Usage: middleware [options]"
 
   opts.on('--bind', 'Address to bind') do |v|
     options[:bind] = v
+  end
+
+  opts.on('--port', 'Port to bind') do |v|
+    options[:port] = v
   end
 
   opts.on('--curve-private-key=s', 'The curve privatekey') do |v|
