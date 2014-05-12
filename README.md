@@ -75,7 +75,7 @@ This is used to detect stalled/dead connections.
 
 For a description of the protocol in use please see [PROTOCOL.md](PROTOCOL.md).
 
-zeromq's implementation or Curve does not appear to easily allow for trust
+zeromq's implementation of Curve does not appear to easily allow for trust
 relationship between keys, so there's no existing model for 'create a ca to
 issue keys and track revocations'.
 
@@ -84,7 +84,7 @@ by the server http://hintjens.com/blog:36, the clients can only verify the
 server is the one indicated by `plugin.zeromq.broker.public_key`.
 
 The implementation of the broker does not allow for persistent queues, and so
-adavnced uses of MCollective's asyncronous reply handling pattern such as
+advanced uses of MCollective's asyncronous reply handling pattern such as
 those explained [here][async_handling] are not currently supported.
 
 [async_handling]: http://www.devco.net/archives/2012/08/19/mcollective-async-result-handling.php
