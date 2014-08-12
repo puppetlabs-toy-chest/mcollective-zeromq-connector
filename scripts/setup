@@ -2,6 +2,7 @@
 require 'thor'
 require 'pathname'
 require 'progress_bar'
+require 'yaml'
 
 class Setup < Thor
   # Making demo environments is a bit fiddly as you have to set up a config file
@@ -110,6 +111,9 @@ plugin.psk = pies
 
 identity = #{node}
 
+factsource = yaml
+plugin.yaml = #{node}.facts.yaml
+
 connector = zeromq
 plugin.zeromq.broker.host = 127.0.0.1
         """
@@ -123,6 +127,17 @@ plugin.zeromq.private_key = #{node}.private
         # still have to say no to curve
         file.puts "plugin.zeromq.curve = false"
       end
+    end
+
+    facts = {
+      "foo" => {
+        "bar" => "baz"
+      },
+      "five" => 5,
+      "six_string" => "6",
+    }
+    File.open(directory + "#{node}.facts.yaml", 'w') do |fh|
+      fh.puts facts.to_yaml
     end
   end
 
